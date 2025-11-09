@@ -36,13 +36,16 @@ def sample_seeds(total_seeds, count):
 
 
 def train(model, args):
+    # Get device from model
+    device = next(model.parameters()).device
+    
     optimizer = torch.optim.Adam(model.parameters(), lr=args.training.learning_rate)
     curriculum = Curriculum(args.training.curriculum)
 
     starting_step = 0
     state_path = os.path.join(args.out_dir, "state.pt")
     if os.path.exists(state_path):
-        state = torch.load(state_path)
+        state = torch.load(state_path, map_location=device)
         model.load_state_dict(state["model_state_dict"])
         optimizer.load_state_dict(state["optimizer_state_dict"])
         starting_step = state["train_step"]
@@ -86,11 +89,11 @@ def train(model, args):
 
         loss_func = task.get_training_metric()
 
-        loss, output = train_step(model, xs.cuda(), ys.cuda(), optimizer, loss_func)
+        loss, output = train_step(model, xs.to(device), ys.to(device), optimizer, loss_func)
 
         point_wise_tags = list(range(curriculum.n_points))
         point_wise_loss_func = task.get_metric()
-        point_wise_loss = point_wise_loss_func(output, ys.cuda()).mean(dim=0)
+        point_wise_loss = point_wise_loss_func(output, ys.to(device)).mean(dim=0)
 
         baseline_loss = (
             sum(
@@ -134,7 +137,7 @@ def train(model, args):
             torch.save(model.state_dict(), os.path.join(args.out_dir, f"model_{i}.pt"))
 
 
-def main(args):
+def main(args, config_dict=None):
     if args.test_run:
         curriculum_args = args.training.curriculum
         curriculum_args.points.start = curriculum_args.points.end
@@ -145,14 +148,24 @@ def main(args):
             dir=args.out_dir,
             project=args.wandb.project,
             entity=args.wandb.entity,
-            config=args.__dict__,
+            config=config_dict if config_dict else vars(args),
             notes=args.wandb.notes,
             name=args.wandb.name,
             resume=True,
         )
 
+    # Detect device and move model (support CUDA, MPS, and CPU)
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    
+    print(f"Using device: {device}")
+    
     model = build_model(args.model)
-    model.cuda()
+    model = model.to(device)
     model.train()
 
     train(model, args)
@@ -207,4 +220,4 @@ if __name__ == "__main__":
         with open(os.path.join(out_dir, "config.yaml"), "w") as yaml_file:
             yaml.dump(config_dict, yaml_file, default_flow_style=False)
 
-    main(args)
+    main(args, config_dict)

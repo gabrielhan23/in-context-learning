@@ -115,17 +115,46 @@ def load_config(config_path, _apply_defaults=True):
     return config
 
 
+class DictConfig:
+    """Simple configuration object that allows both dict and attribute access.
+    
+    This replaces argparse.Namespace with a cleaner implementation that:
+    - Allows attribute access (args.training.task)
+    - Keeps plain dicts as dicts (for **kwargs unpacking)
+    - Supports modification of attributes
+    """
+    
+    def __init__(self, d):
+        if isinstance(d, dict):
+            for key, value in d.items():
+                if isinstance(value, dict):
+                    # Keep dict keys that are typically used with **kwargs as plain dicts
+                    # Otherwise convert to DictConfig for nested attribute access
+                    if key in {'task_kwargs'} or not value:  # Empty dicts or kwargs dicts
+                        setattr(self, key, value)
+                    else:
+                        setattr(self, key, DictConfig(value))
+                elif isinstance(value, list):
+                    setattr(self, key, [DictConfig(item) if isinstance(item, dict) and item else item for item in value])
+                else:
+                    setattr(self, key, value)
+    
+    def __getitem__(self, key):
+        return getattr(self, key)
+    
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
+
+
 def dict_to_namespace(d):
-    """Convert nested dictionary to nested namespace for attribute access."""
-    if isinstance(d, dict):
-        namespace = argparse.Namespace()
-        for key, value in d.items():
-            setattr(namespace, key, dict_to_namespace(value))
-        return namespace
-    elif isinstance(d, list):
-        return [dict_to_namespace(item) for item in d]
-    else:
-        return d
+    """Convert nested dictionary to config object that allows attribute access.
+    
+    Returns a DictConfig object that supports:
+    - Attribute access: config.model.n_dims
+    - Dict-style access: config['model']['n_dims']
+    - Keeps certain keys (like task_kwargs) as plain dicts for **kwargs unpacking
+    """
+    return DictConfig(d)
 
 
 def validate_config(config):

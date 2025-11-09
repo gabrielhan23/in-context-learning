@@ -23,13 +23,21 @@ def get_model_from_run(run_path, step=-1, only_conf=False):
 
     model = models.build_model(conf.model)
 
+    # Detect device for loading checkpoints (support CUDA, MPS, and CPU)
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+
     if step == -1:
         state_path = os.path.join(run_path, "state.pt")
-        state = torch.load(state_path)
+        state = torch.load(state_path, map_location=device)
         model.load_state_dict(state["model_state_dict"])
     else:
         model_path = os.path.join(run_path, f"model_{step}.pt")
-        state_dict = torch.load(model_path)
+        state_dict = torch.load(model_path, map_location=device)
         model.load_state_dict(state_dict)
 
     return model, conf
@@ -40,8 +48,14 @@ def get_model_from_run(run_path, step=-1, only_conf=False):
 
 def eval_batch(model, task_sampler, xs, xs_p=None):
     task = task_sampler()
-    if torch.cuda.is_available() and model.name.split("_")[0] in ["gpt2", "lstm"]:
-        device = "cuda"
+    # Support CUDA, MPS, and CPU for transformer models
+    if model.name.split("_")[0] in ["gpt2", "lstm"]:
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
     else:
         device = "cpu"
 
@@ -295,7 +309,16 @@ def get_run_metrics(
         all_models = []
     else:
         model, conf = get_model_from_run(run_path, step)
-        model = model.cuda().eval()
+        
+        # Detect device and move model (support CUDA, MPS, and CPU)
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
+        
+        model = model.to(device).eval()
         all_models = [model]
         if not skip_baselines:
             all_models += models.get_relevant_baselines(conf.training.task)
