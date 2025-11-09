@@ -1,8 +1,8 @@
 import os
 from random import randint
 import uuid
+import argparse
 
-from quinine import QuinineArgumentParser
 from tqdm import tqdm
 import torch
 import yaml
@@ -11,7 +11,7 @@ from eval import get_run_metrics
 from tasks import get_task_sampler
 from samplers import get_data_sampler
 from curriculum import Curriculum
-from schema import schema
+from schema import load_config, dict_to_namespace, validate_config
 from models import build_model
 
 import wandb
@@ -162,10 +162,37 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = QuinineArgumentParser(schema=schema)
-    args = parser.parse_quinfig()
+    if torch.cuda.is_available():
+        print("CUDA is available!")
+        print(f"Number of GPUs: {torch.cuda.device_count()}")
+        print(f"Current device: {torch.cuda.current_device()}")
+        print(f"Device name: {torch.cuda.get_device_name(0)}") # Get name of the first GPU
+    else:
+        print("CUDA is not available. PyTorch will use the CPU.")
+
+    parser = argparse.ArgumentParser(description="Train in-context learning models")
+    parser.add_argument(
+        "--config", 
+        type=str, 
+        required=True,
+        help="Path to YAML configuration file"
+    )
+    
+    cmd_args = parser.parse_args()
+    
+    # Load configuration from YAML file
+    config_dict = load_config(cmd_args.config)
+
+    print(config_dict)
+    
+    # Validate configuration
+    validate_config(config_dict)
+    
+    # Convert to namespace for attribute access
+    args = dict_to_namespace(config_dict)
+    
     assert args.model.family in ["gpt2", "lstm"]
-    print(f"Running with: {args}")
+    print(f"Running with config from: {cmd_args.config}")
 
     if not args.test_run:
         run_id = args.training.resume_id
@@ -178,6 +205,6 @@ if __name__ == "__main__":
         args.out_dir = out_dir
 
         with open(os.path.join(out_dir, "config.yaml"), "w") as yaml_file:
-            yaml.dump(args.__dict__, yaml_file, default_flow_style=False)
+            yaml.dump(config_dict, yaml_file, default_flow_style=False)
 
     main(args)
