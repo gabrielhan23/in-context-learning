@@ -180,6 +180,8 @@ if __name__ == "__main__":
         print(f"Number of GPUs: {torch.cuda.device_count()}")
         print(f"Current device: {torch.cuda.current_device()}")
         print(f"Device name: {torch.cuda.get_device_name(0)}") # Get name of the first GPU
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        print("MPS is available! Using Apple Silicon GPU.")
     else:
         print("CUDA is not available. PyTorch will use the CPU.")
 
