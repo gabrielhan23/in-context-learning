@@ -10,5 +10,5 @@ nbstripout --install
 
 ## Train: 
 ```
-python src/train.py --config src/conf/toy.yaml
+python3 src/train.py --config src/conf/toy.yaml
 ```

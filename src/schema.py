@@ -122,6 +122,7 @@ class DictConfig:
     - Allows attribute access (args.training.task)
     - Keeps plain dicts as dicts (for **kwargs unpacking)
     - Supports modification of attributes
+    - Supports 'in' operator for checking key existence
     """
     
     def __init__(self, d):
@@ -144,6 +145,14 @@ class DictConfig:
     
     def __setitem__(self, key, value):
         setattr(self, key, value)
+    
+    def __contains__(self, key):
+        """Support 'in' operator for checking if attribute exists."""
+        return hasattr(self, key)
+    
+    def get(self, key, default=None):
+        """Dict-like get method with default value."""
+        return getattr(self, key, default)
 
 
 def dict_to_namespace(d):
