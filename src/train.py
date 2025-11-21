@@ -13,6 +13,7 @@ from samplers import get_data_sampler
 from curriculum import Curriculum
 from schema import load_config, dict_to_namespace, validate_config
 from models import build_model
+from print_torch import pt as pprint
 
 import wandb
 
@@ -89,7 +90,13 @@ def train(model, args):
 
         loss_func = task.get_training_metric()
 
+        pprint("YS", ys)
+        pprint("XS", xs)
+
         loss, output = train_step(model, xs.to(device), ys.to(device), optimizer, loss_func)
+
+        pprint("OUTPUT", output)
+        pprint("loss", loss)
 
         point_wise_tags = list(range(curriculum.n_points))
         point_wise_loss_func = task.get_metric()

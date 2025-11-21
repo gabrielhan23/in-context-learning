@@ -60,6 +60,7 @@ def get_task_sampler(
         "quadratic_regression": QuadraticRegression,
         "relu_2nn_regression": Relu2nnRegression,
         "decision_tree": DecisionTree,
+        "predator_prey": PredatorPrey,
     }
     if task_name in task_names_to_classes:
         task_cls = task_names_to_classes[task_name]
@@ -290,7 +291,7 @@ class DecisionTree(Task):
             self.target_tensor = torch.randn(self.dt_tensor.shape)
         elif seeds is not None:
             self.dt_tensor = torch.zeros(batch_size, 2 ** (depth + 1) - 1)
-            self.target_tensor = torch.zeros_like(dt_tensor)
+            self.target_tensor = torch.zeros_like(self.dt_tensor)
             generator = torch.Generator()
             assert len(seeds) == self.b_size
             for i, seed in enumerate(seeds):
@@ -342,3 +343,184 @@ class DecisionTree(Task):
     @staticmethod
     def get_training_metric():
         return mean_squared_error
+
+class PredatorPrey(Task):
+    """
+    Predator-Prey parameter estimation task using Lotka-Volterra equations.
+    
+    The task is to estimate parameters [alpha, beta, gamma, delta] from time series observations.
+    
+    Lotka-Volterra equations:
+    dx/dt = alpha*x - beta*x*y    (prey growth - predation)
+    dy/dt = delta*x*y - gamma*y   (predator growth - death)
+    
+    where x is prey population, y is predator population, and
+    alpha, beta, gamma, delta are positive parameters.
+    
+    Input (xs): Time points [batch, n_points, n_dims] where first dim is time
+    Output (ys): Population trajectories [batch, n_points, 2] for [prey, predator]
+    Target: Parameters [alpha, beta, gamma, delta] at last position only
+    """
+    
+    def __init__(
+        self, 
+        n_dims, 
+        batch_size, 
+        pool_dict=None, 
+        seeds=None, 
+        scale=1,
+        param_range=(0.5, 2.0)
+    ):
+        """
+        Args:
+            n_dims: dimension of input time points (typically 1)
+            batch_size: number of tasks in batch
+            pool_dict: pregenerated parameter pool
+            seeds: random seeds for reproducibility
+            scale: scaling factor for outputs
+            param_range: range for randomly sampling parameters (min, max)
+        """
+        super(PredatorPrey, self).__init__(n_dims, batch_size, pool_dict, seeds)
+        self.scale = scale
+        self.param_range = param_range
+        
+        # Generate true parameters for each batch: [alpha, beta, gamma, delta]
+        if pool_dict is None and seeds is None:
+            param_min, param_max = param_range
+            self.params_b = torch.rand(self.b_size, 4) * (param_max - param_min) + param_min
+        elif seeds is not None:
+            self.params_b = torch.zeros(self.b_size, 4)
+            generator = torch.Generator()
+            assert len(seeds) == self.b_size
+            param_min, param_max = param_range
+            for i, seed in enumerate(seeds):
+                generator.manual_seed(seed)
+                self.params_b[i] = torch.rand(4, generator=generator) * (param_max - param_min) + param_min
+        else:
+            assert "params" in pool_dict
+            indices = torch.randperm(len(pool_dict["params"]))[:batch_size]
+            self.params_b = pool_dict["params"][indices]
+    
+    def _simulate_lotka_volterra(self, params, time_points, device):
+        """
+        Simulate Lotka-Volterra equations using Euler method.
+        
+        Args:
+            params: [alpha, beta, gamma, delta] parameters (tensor)
+            time_points: [n_points] tensor of time values
+            device: torch device
+            
+        Returns:
+            trajectory: [n_points, 2] tensor of [prey, predator] populations
+        """
+        alpha, beta, gamma, delta = params
+        n_points = len(time_points)
+        
+        # Initial conditions
+        x = torch.tensor(10.0, device=device)  # initial prey population
+        y = torch.tensor(5.0, device=device)   # initial predator population
+        
+        trajectory = torch.zeros(n_points, 2, device=device)
+        trajectory[0, 0] = x
+        trajectory[0, 1] = y
+        
+        for i in range(1, n_points):
+            # Compute dt from time points
+            dt = time_points[i] - time_points[i-1]
+            
+            # Lotka-Volterra equations
+            dx_dt = alpha * x - beta * x * y
+            dy_dt = delta * x * y - gamma * y
+            
+            # Euler integration
+            x = x + dx_dt * dt
+            y = y + dy_dt * dt
+            
+            # Prevent populations from going negative or exploding
+            x = torch.clamp(x, 0.1, 1000.0)
+            y = torch.clamp(y, 0.1, 1000.0)
+            
+            trajectory[i, 0] = x
+            trajectory[i, 1] = y
+        
+        return trajectory
+
+    def evaluate(self, xs_b):
+        """
+        Generate population trajectories from time points using Lotka-Volterra equations.
+        
+        Args:
+            xs_b: Input time points of shape (batch_size, n_points, n_dims)
+                  First dimension contains time values
+            
+        Returns:
+            ys_b: Population trajectories of shape (batch_size, n_points, 2)
+                  Contains [prey, predator] populations at each time point
+        """
+        batch_size = xs_b.shape[0]
+        n_points = xs_b.shape[1]
+        device = xs_b.device
+        
+        params_b = self.params_b.to(device)
+        
+        # Generate trajectories - ys_b will contain [prey, predator] populations
+        ys_b = torch.zeros(batch_size, n_points, 2, device=device)
+        
+        for b in range(batch_size):
+            # Extract time points from first dimension of xs_b
+            time_points = xs_b[b, :, 0]
+            
+            # Simulate trajectory using the ODE with true parameters
+            trajectory = self._simulate_lotka_volterra(params_b[b], time_points, device)
+            
+            # Store trajectory as output
+            ys_b[b] = trajectory
+        
+        return ys_b
+
+    @staticmethod
+    def generate_pool_dict(n_dims, num_tasks, param_range=(0.5, 2.0), **kwargs):
+        """Generate a pool of predator-prey parameter estimation tasks."""
+        param_min, param_max = param_range
+        return {
+            "params": torch.rand(num_tasks, 4) * (param_max - param_min) + param_min
+        }
+
+    def get_metric(self):
+        """Return metric that evaluates parameter estimation at the last position."""
+        params_b = self.params_b  # Capture true parameters
+        
+        def param_estimation_error(ys_pred, ys):
+            # ys_pred: [batch, n_points, 4] - predicted parameters at each position
+            # ys: [batch, n_points, 2] - observed populations (not used for loss)
+            
+            # Extract predictions at last position
+            last_pred = ys_pred[:, -1, :]  # [batch, 4]
+            
+            # Compare to true parameters
+            true_params = params_b.to(ys_pred.device)
+            error = (last_pred - true_params).square()  # [batch, 4]
+            
+            return error.mean(dim=1)  # [batch] - mean error across 4 parameters
+        
+        return param_estimation_error
+
+    def get_training_metric(self):
+        """Return training metric for parameter estimation."""
+        params_b = self.params_b  # Capture true parameters
+        
+        def param_estimation_loss(ys_pred, ys):
+            # ys_pred: [batch, n_points, 4] - predicted parameters at each position
+            # ys: [batch, n_points, 2] - observed populations
+            
+            # Only use the last position for loss
+            last_pred = ys_pred[:, -1, :]  # [batch, 4]
+            
+            # Compare to true parameters
+            true_params = params_b.to(ys_pred.device)
+            loss = ((last_pred - true_params).square()).mean()
+            
+            return loss
+        
+        return param_estimation_loss
+    

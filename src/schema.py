@@ -13,6 +13,7 @@ TASK_LIST = [
     "linear_classification",
     "relu_2nn_regression",
     "decision_tree",
+    "predator_prey",
 ]
 
 # Default configuration values
@@ -169,15 +170,15 @@ def dict_to_namespace(d):
 def validate_config(config):
     """Validate configuration values."""
     # Check model family
-    if config.get("model", {}).get("family") not in ["gpt2", "lstm"]:
-        raise ValueError("model.family must be 'gpt2' or 'lstm'")
+    if config.get("model", {}).get("family") not in ["gpt2", "lstm", "gpt2_param_estimation"]:
+        raise ValueError("model.family must be 'gpt2', 'lstm', or 'gpt2_param_estimation'")
     
     # Check task
     if config.get("training", {}).get("task") not in TASK_LIST:
         raise ValueError(f"training.task must be one of {TASK_LIST}")
     
     # Check data
-    if config.get("training", {}).get("data") not in ["gaussian"]:
-        raise ValueError("training.data must be 'gaussian'")
+    if config.get("training", {}).get("data") not in ["gaussian", "time_series"]:
+        raise ValueError("training.data must be 'gaussian' or 'time_series'")
     
     return config

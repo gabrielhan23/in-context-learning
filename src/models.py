@@ -20,6 +20,15 @@ def build_model(conf):
             n_layer=conf.n_layer,
             n_head=conf.n_head,
         )
+    elif conf.family == "gpt2_param_estimation":
+        model = TransformerParamEstimationModel(
+            n_dims=conf.n_dims,
+            n_positions=conf.n_positions,
+            n_embd=conf.n_embd,
+            n_layer=conf.n_layer,
+            n_head=conf.n_head,
+            n_params=conf.get('n_params', 4),  # default to 4 parameters
+        )
     else:
         raise NotImplementedError
 
@@ -125,6 +134,120 @@ class TransformerModel(nn.Module):
         output = self._backbone(inputs_embeds=embeds).last_hidden_state
         prediction = self._read_out(output)
         return prediction[:, ::2, 0][:, inds]  # predict only on xs
+
+
+class TransformerParamEstimationModel(nn.Module):
+    """
+    Transformer model for parameter estimation tasks like predator-prey.
+    
+    Takes in time series data (time points, population1, population2) and
+    outputs parameter estimates (4 parameters) at each position.
+    """
+    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4, n_params=4):
+        super(TransformerParamEstimationModel, self).__init__()
+        configuration = GPT2Config(
+            n_positions=2 * n_positions,
+            n_embd=n_embd,
+            n_layer=n_layer,
+            n_head=n_head,
+            resid_pdrop=0.0,
+            embd_pdrop=0.0,
+            attn_pdrop=0.0,
+            use_cache=False,
+        )
+        self.name = f"gpt2_param_est_embd={n_embd}_layer={n_layer}_head={n_head}_params={n_params}"
+
+        self.n_positions = n_positions
+        self.n_dims = n_dims
+        self.n_params = n_params
+        
+        # Read in: project input (time + 2 populations) to embedding space
+        # Input has n_dims dimensions (typically 1 for time, rest unused)
+        # But we'll also incorporate the 2 population values
+        self._read_in = nn.Linear(n_dims + 2, n_embd)  # +2 for prey and predator populations
+        
+        self._backbone = GPT2Model(configuration)
+        
+        # Read out: project to n_params outputs (e.g., 4 for alpha, beta, gamma, delta)
+        self._read_out = nn.Linear(n_embd, n_params)
+
+    @staticmethod
+    def _combine(xs_b, ys_b):
+        """
+        Interleaves the x's (time+populations) and the y's (dummy) into a single sequence.
+        
+        For parameter estimation:
+        - xs_b contains time points in first dim, and populations in remaining dims
+        - ys_b is not really used for input (we use populations instead)
+        
+        We'll format as: [time+pop1+pop2, dummy, time+pop1+pop2, dummy, ...]
+        """
+        bsize, points, dim = xs_b.shape
+        
+        # ys_b is actually [batch, points, 2] containing [prey, predator] populations
+        # We need to combine xs (time) with ys (populations)
+        # xs_b: [batch, points, n_dims] where first dim is time
+        # ys_b: [batch, points, 2] containing populations
+        
+        # Create input that has [time, prey, predator] for each point
+        # Then create dummy output slot
+        
+        # Extract time from xs (first dimension)
+        time_points = xs_b[:, :, :1]  # [batch, points, 1]
+        
+        # If xs has more dimensions, keep them
+        if dim > 1:
+            extra_dims = xs_b[:, :, 1:]  # [batch, points, n_dims-1]
+        else:
+            extra_dims = torch.zeros(bsize, points, 0, device=xs_b.device)
+        
+        # Combine: [time, extra_dims, prey, predator]
+        input_data = torch.cat([time_points, extra_dims, ys_b], dim=2)  # [batch, points, n_dims+2]
+        
+        # Create dummy data for y positions (not used, but needed for sequence structure)
+        dummy_data = torch.zeros_like(input_data)
+        
+        # Interleave: [input, dummy, input, dummy, ...]
+        zs = torch.stack((input_data, dummy_data), dim=2)  # [batch, points, 2, n_dims+2]
+        zs = zs.view(bsize, 2 * points, -1)  # [batch, 2*points, n_dims+2]
+        
+        return zs
+
+    def forward(self, xs, ys, inds=None):
+        """
+        Forward pass for parameter estimation.
+        
+        Args:
+            xs: [batch, n_points, n_dims] - time points
+            ys: [batch, n_points, 2] - population observations [prey, predator]
+            inds: indices to predict at (default: all)
+            
+        Returns:
+            predictions: [batch, n_points, n_params] - parameter estimates at each position
+        """
+        if inds is None:
+            inds = torch.arange(ys.shape[1])
+        else:
+            inds = torch.tensor(inds)
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+        
+        # Combine inputs
+        zs = self._combine(xs, ys)
+        
+        # Embed
+        embeds = self._read_in(zs)
+        
+        # Process through transformer
+        output = self._backbone(inputs_embeds=embeds).last_hidden_state
+        
+        # Project to parameters
+        prediction = self._read_out(output)
+        
+        # Return predictions only at input positions (not dummy positions)
+        # prediction shape: [batch, 2*n_points, n_params]
+        # We want: [batch, n_points, n_params] at positions inds
+        return prediction[:, ::2, :][:, inds, :]  # predict only on xs
 
 
 class NNModel:
@@ -322,7 +445,16 @@ class GDModel:
         # prediction made at all indices by default.
         # xs: bsize X npoints X ndim.
         # ys: bsize X npoints.
-        xs, ys = xs.cuda(), ys.cuda()
+        
+        # Detect device (support CUDA, MPS, and CPU)
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
+        
+        xs, ys = xs.to(device), ys.to(device)
 
         if inds is None:
             inds = range(ys.shape[1])
@@ -338,7 +470,7 @@ class GDModel:
             model = ParallelNetworks(
                 ys.shape[0], self.model_class, **self.model_class_args
             )
-            model.cuda()
+            model = model.to(device)
             if i > 0:
                 pred = torch.zeros_like(ys[:, 0])
 

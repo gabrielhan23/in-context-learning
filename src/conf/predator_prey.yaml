@@ -1,0 +1,23 @@
+inherit: 
+    - base.yaml
+
+model:
+    family: gpt2_param_estimation
+    n_params: 4  # alpha, beta, gamma, delta
+
+training:
+    task: predator_prey
+    task_kwargs:
+        param_range: [0.5, 2.0]  # Range for Lotka-Volterra parameters
+    data: time_series  # Use time series sampler
+    curriculum:
+        points:
+            start: 11
+            end: 41
+            inc: 2
+            interval: 2000
+
+out_dir: models/predator_prey
+
+wandb:
+    name: "predator_prey_standard"
