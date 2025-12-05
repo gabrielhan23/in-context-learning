@@ -1,0 +1,23 @@
+inherit:
+  - predator_prey.yaml
+
+# Lightweight test config for predator-prey parameter estimation
+model:
+  # Use the smaller model settings from models/tiny but for param estimation
+  family: gpt2_param_estimation
+  n_embd: 64
+  n_layer: 2
+  n_head: 2
+  n_params: 4
+
+training:
+  train_steps: 50
+  batch_size: 8
+  # keep other training settings from inherited config/base
+
+test_run: true
+
+out_dir: models/predator_prey_test
+
+wandb:
+  name: "predator_prey_test"
