@@ -26,7 +26,7 @@ def test_blood_flow():
     batch_size = 4
     n_points = 100
     
-    print(f"\nTask Configuration:")
+    print("\nTask Configuration:")
     print(f"  Input dimensions: {n_dims} (time, AIF)")
     print(f"  Batch size: {batch_size}")
     print(f"  Time points: {n_points}")
@@ -34,25 +34,24 @@ def test_blood_flow():
     # Create blood flow task
     task = BloodFlow(n_dims=n_dims, batch_size=batch_size)
     
-    print(f"\nTrue Parameters for each batch:")
-    print(f"  Format: [F, vp, ve, PS]")
+    print("\nTrue Parameters for each batch:")
+    print("  Format: [F, vp, ve, PS]")
     for i in range(batch_size):
         params = task.params_b[i].numpy()
         print(f"  Batch {i}: F={params[0]:.3f}, vp={params[1]:.3f}, "
               f"ve={params[2]:.3f}, PS={params[3]:.3f}")
     
-    # Generate time points (0 to 60 seconds, typical for MRI)
+    # Generate batch time points
     time_points = torch.linspace(0, 60, n_points)
-    
-    # Create input: time + AIF
+    time_points_batch = time_points.unsqueeze(0).repeat(batch_size, 1)  # [batch, n_points]
+
+    # Generate AIFs for the whole batch
+    aif_batch = task._generate_aif_batch(time_points_batch)  # [batch, n_points]
+
+    # Fill xs_b
     xs_b = torch.zeros(batch_size, n_points, n_dims)
-    
-    for b in range(batch_size):
-        xs_b[b, :, 0] = time_points
-        # Generate AIF using gamma variate
-        seed = b + 1000
-        aif = task._generate_aif(time_points, xs_b.device, seed)
-        xs_b[b, :, 1] = aif
+    xs_b[:, :, 0] = time_points_batch
+    xs_b[:, :, 1] = aif_batch
     
     # Evaluate the task (generate tissue curves)
     print("\nGenerating tissue concentration curves...")
@@ -93,7 +92,7 @@ def test_blood_flow():
         
         # Legend
         lines = line1 + line2
-        labels = [l.get_label() for l in lines]
+        labels = [line.get_label() for line in lines]
         ax.legend(lines, labels, loc='upper right', fontsize=8)
         
         ax.grid(True, alpha=0.3)
@@ -101,7 +100,7 @@ def test_blood_flow():
     plt.tight_layout()
     
     # Save figure
-    output_path = '/home/shashwat/projects/in-context-learning/blood_flow_test.png'
+    output_path = 'blood_flow_test.png'
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"\nVisualization saved to: {output_path}")
     

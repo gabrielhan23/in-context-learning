@@ -1,19 +1,19 @@
-inherit: 
+inherit:
     - base.yaml
 
 model:
     family: gpt2_param_estimation
-    n_params: 4  # F, vp, ve, PS
+    n_params: 4 # F, vp, ve, PS
 
 training:
     task: blood_flow
     task_kwargs:
         param_ranges:
-            F: [0.5, 2.0]      # Flow in ml/g/min
-            vp: [0.02, 0.10]   # Plasma volume fraction
-            ve: [0.10, 0.30]   # Extracellular volume fraction
-            PS: [0.1, 0.8]     # Permeability in ml/g/min
-    data: time_series  # Use time series sampler
+            F: [0.5, 4.0]    # Flow in ml/g/min
+            vp: [0.02, 0.15] # Plasma volume fraction
+            ve: [0.18, 0.5]  # Extracellular volume fraction
+            PS: [0.1, 1.0]   # Permeability in ml/g/min
+    data: time_series # Use time series sampler
     curriculum:
         points:
             start: 11

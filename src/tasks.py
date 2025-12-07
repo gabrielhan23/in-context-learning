@@ -1,6 +1,7 @@
 import math
 
 import torch
+import numpy as np
 
 
 def squared_error(ys_pred, ys):
@@ -525,242 +526,105 @@ class PredatorPrey(Task):
         
         return param_estimation_loss
 
-
-class BloodFlow(Task):
-    """
-    Myocardial Blood Flow parameter estimation task.
-    
-    Implements the forward model for myocardial perfusion imaging using
-    a compartmental model with the following differential equations:
-    
-    dC_p/dt = F * (C_a - C_p/vp)
-    dC_e/dt = PS * (C_p/vp - C_e/ve)
-    C_tissue = C_p + C_e
-    
-    where:
-    - C_a: Arterial Input Function (AIF) - blood concentration in artery
-    - C_p: Plasma concentration in tissue
-    - C_e: Extracellular concentration in tissue
-    - C_tissue: Total tissue concentration (what we observe in MRI)
-    
-    Parameters to estimate:
-    - F: Flow (blood flow rate, typically 0.5-2.0 ml/g/min)
-    - vp: Plasma volume fraction (typically 0.02-0.10)
-    - ve: Extracellular volume fraction (typically 0.10-0.30)
-    - PS: Permeability-surface area product (typically 0.1-0.8 ml/g/min)
-    
-    Input (xs): Time points and AIF values [batch, n_points, n_dims]
-                First dimension is time, second is AIF
-    Output (ys): Tissue concentration curve [batch, n_points, 1]
-    Target: Parameters [F, vp, ve, PS] at last position only
-    """
-    
-    def __init__(
-        self, 
-        n_dims, 
-        batch_size, 
-        pool_dict=None, 
-        seeds=None, 
-        scale=1,
-        param_ranges=None
-    ):
-        """
-        Args:
-            n_dims: dimension of input (should be 2: time and AIF)
-            batch_size: number of tasks in batch
-            pool_dict: pregenerated parameter pool
-            seeds: random seeds for reproducibility
-            scale: scaling factor for outputs
-            param_ranges: dict of (min, max) for each parameter
-        """
-        super(BloodFlow, self).__init__(n_dims, batch_size, pool_dict, seeds)
+class BloodFlow:
+    def __init__(self, n_dims=2, batch_size=4, param_ranges=None,
+                 rk4_substeps=8, device=None, scale=1.0):
+        self.n_dims = n_dims
+        self.b_size = batch_size
+        self.rk4_substeps = rk4_substeps
         self.scale = scale
-        
-        # Default physiologically plausible ranges
+        self.device = device or torch.device('cpu')
+
+        # physiologically plausible ranges for parameters
         if param_ranges is None:
             param_ranges = {
-                'F': (0.5, 2.0),      # Flow in ml/g/min
-                'vp': (0.02, 0.10),   # Plasma volume fraction
-                've': (0.10, 0.30),   # Extracellular volume fraction
-                'PS': (0.1, 0.8)      # Permeability in ml/g/min
+                'F': (0.5, 4.0),    # Flow in ml/g/min
+                'vp': (0.02, 0.15), # Plasma volume fraction
+                've': (0.18, 0.5),  # Extracellular volume fraction
+                'PS': (0.1, 1.0),   # Permeability in ml/g/min
+                'tau0': (0.2, 5.0)  # Transit delay (s)
             }
         self.param_ranges = param_ranges
+
+        # generate random parameters for batch: [F, vp, ve, PS, tau0]
+        self.params_b = torch.zeros(self.b_size, 5, device=self.device)
+        for i, (_, (pmin, pmax)) in enumerate(param_ranges.items()):
+            self.params_b[:, i] = torch.rand(self.b_size, device=self.device) * (pmax - pmin) + pmin
+
+    def _generate_aif_batch(self, time_points):
+        batch, _ = time_points.shape
+        A = torch.rand(batch, 1, device=self.device) * 3.0 + 2.0
+        alpha = torch.rand(batch, 1, device=self.device) * 2.0 + 2.0
+        beta = torch.rand(batch, 1, device=self.device) * 2.0 + 1.0
+        t0 = torch.rand(batch, 1, device=self.device) * 2.0 + 1.0
+        t_shifted = (time_points - t0).clamp(min=0.0)
+        return A * (t_shifted ** alpha) * torch.exp(-t_shifted / beta)
+
+    def _apply_delay(self, time_points, aif, tau0):
+        batch, _ = time_points.shape
+        aif_delayed = torch.zeros_like(aif)
+        for b in range(batch):
+            t_shifted = (time_points[b] - tau0[b]).clamp(min=0.0)
+            # linear interpolation over original AIF
+            aif_delayed[b] = torch.from_numpy(
+                np.interp(t_shifted.cpu().numpy(),
+                          time_points[b].cpu().numpy(),
+                          aif[b].cpu().numpy())).to(self.device)
+        return aif_delayed
+
+    def _rk4_step(self, Cp, Ce, Ca, dt, Fv, vp, ve, PS):
         
-        # Generate true parameters for each batch: [F, vp, ve, PS]
-        if pool_dict is None and seeds is None:
-            self.params_b = torch.zeros(self.b_size, 4)
-            for i, (key, (pmin, pmax)) in enumerate(param_ranges.items()):
-                self.params_b[:, i] = torch.rand(self.b_size) * (pmax - pmin) + pmin
-        elif seeds is not None:
-            self.params_b = torch.zeros(self.b_size, 4)
-            generator = torch.Generator()
-            assert len(seeds) == self.b_size
-            for b, seed in enumerate(seeds):
-                generator.manual_seed(seed)
-                for i, (key, (pmin, pmax)) in enumerate(param_ranges.items()):
-                    self.params_b[b, i] = torch.rand(1, generator=generator) * (pmax - pmin) + pmin
-        else:
-            assert "params" in pool_dict
-            indices = torch.randperm(len(pool_dict["params"]))[:batch_size]
-            self.params_b = pool_dict["params"][indices]
-    
-    def _simulate_blood_flow(self, params, time_points, aif_values, device):
-        """
-        Simulate myocardial perfusion using compartmental model.
-        
-        Args:
-            params: [F, vp, ve, PS] parameters (tensor)
-            time_points: [n_points] tensor of time values
-            aif_values: [n_points] tensor of arterial input function values
-            device: torch device
-            
-        Returns:
-            tissue_curve: [n_points] tensor of tissue concentration
-        """
-        F, vp, ve, PS = params
-        n_points = len(time_points)
-        
-        # Initial conditions
-        C_p = torch.tensor(0.0, device=device)  # Plasma concentration
-        C_e = torch.tensor(0.0, device=device)  # Extracellular concentration
-        
-        tissue_curve = torch.zeros(n_points, device=device)
-        
+        # ODE derivatives
+        def dCp(Cp, Ce, Ca): 
+            return Fv*(Ca - Cp/vp) + PS*(Ce - Cp)
+        def dCe(Cp, Ce): 
+            return PS*(Cp - Ce)
+
+        k1_Cp = dCp(Cp, Ce, Ca) * dt
+        k1_Ce = dCe(Cp, Ce) * dt
+        k2_Cp = dCp(Cp + 0.5 * k1_Cp, Ce + 0.5 * k1_Ce, Ca) * dt
+        k2_Ce = dCe(Cp + 0.5 * k1_Cp, Ce + 0.5 * k1_Ce) * dt
+        k3_Cp = dCp(Cp + 0.5 * k2_Cp, Ce + 0.5 * k2_Ce, Ca) * dt
+        k3_Ce = dCe(Cp + 0.5 * k2_Cp, Ce + 0.5 * k2_Ce) * dt
+        k4_Cp = dCp(Cp + k3_Cp, Ce + k3_Ce, Ca) * dt
+        k4_Ce = dCe(Cp + k3_Cp, Ce + k3_Ce) * dt
+
+        Cp_new = Cp + (k1_Cp + 2 * k2_Cp + 2 * k3_Cp + k4_Cp) / 6
+        Ce_new = Ce + (k1_Ce + 2 * k2_Ce + 2 * k3_Ce + k4_Ce) / 6
+
+        Cp_new = Cp_new.clamp(min=0.0)
+        Ce_new = Ce_new.clamp(min=0.0)
+        return Cp_new, Ce_new
+
+    def _simulate_batch(self, time_points, aif_values, params):
+        batch, n_points = time_points.shape
+        tissue = torch.zeros(batch, n_points, device=self.device)
+        Cp = torch.zeros(batch, device=self.device)
+        Ce = torch.zeros(batch, device=self.device)
+
+        Fv, vp, ve, PS, tau0 = params[:,0], params[:,1], params[:,2], params[:,3], params[:,4]
+
+        # apply tau0 delay
+        aif_delayed = self._apply_delay(time_points, aif_values, tau0)
+
         for i in range(n_points):
-            # Current AIF value
-            C_a = aif_values[i]
-            
-            # Compute time step
-            if i > 0:
-                dt = time_points[i] - time_points[i-1]
-                
-                # Compartmental model differential equations
-                # dC_p/dt = F * (C_a - C_p/vp)
-                dC_p_dt = F * (C_a - C_p / vp)
-                
-                # dC_e/dt = PS * (C_p/vp - C_e/ve)
-                dC_e_dt = PS * (C_p / vp - C_e / ve)
-                
-                # Euler integration
-                C_p = C_p + dC_p_dt * dt
-                C_e = C_e + dC_e_dt * dt
-                
-                # Prevent negative concentrations
-                C_p = torch.clamp(C_p, 0.0, 100.0)
-                C_e = torch.clamp(C_e, 0.0, 100.0)
-            
-            # Total tissue concentration
-            tissue_curve[i] = C_p + C_e
-        
-        return tissue_curve
-    
-    def _generate_aif(self, time_points, device, seed=None):
-        """
-        Generate a realistic Arterial Input Function using gamma variate function.
-        
-        AIF(t) = A * (t - t0)^alpha * exp(-(t - t0) / beta)
-        
-        Args:
-            time_points: [n_points] tensor of time values
-            device: torch device
-            seed: optional random seed
-            
-        Returns:
-            aif: [n_points] tensor of AIF values
-        """
-        if seed is not None:
-            generator = torch.Generator(device=device)
-            generator.manual_seed(seed)
-            A = torch.rand(1, generator=generator, device=device) * 3.0 + 2.0  # 2-5
-            alpha = torch.rand(1, generator=generator, device=device) * 2.0 + 2.0  # 2-4
-            beta = torch.rand(1, generator=generator, device=device) * 2.0 + 1.0  # 1-3
-            t0 = torch.rand(1, generator=generator, device=device) * 2.0 + 1.0  # 1-3
-        else:
-            A = torch.rand(1, device=device) * 3.0 + 2.0
-            alpha = torch.rand(1, device=device) * 2.0 + 2.0
-            beta = torch.rand(1, device=device) * 2.0 + 1.0
-            t0 = torch.rand(1, device=device) * 2.0 + 1.0
-        
-        t_shifted = torch.clamp(time_points - t0, min=0.0)
-        aif = A * torch.pow(t_shifted, alpha) * torch.exp(-t_shifted / beta)
-        
-        return aif
+            tissue[:, i] = Cp * vp + Ce * ve
+            if i < n_points - 1:
+                dt = (time_points[:, i + 1] - time_points[:, i]).clamp(min=1e-6)
+                dt_sub = dt / self.rk4_substeps
+                for _ in range(self.rk4_substeps):
+                    Cp, Ce = self._rk4_step(Cp, Ce, aif_delayed[:, i], dt_sub, Fv, vp, ve, PS)
+        return tissue
 
     def evaluate(self, xs_b):
-        """
-        Generate tissue concentration curves from time points using blood flow model.
-        
-        Args:
-            xs_b: Input of shape (batch_size, n_points, n_dims)
-                  If n_dims >= 2: first dim is time, second is AIF
-                  If n_dims == 1: first dim is time, AIF will be generated
-            
-        Returns:
-            ys_b: Tissue curves of shape (batch_size, n_points, 1)
-                  Contains tissue concentration at each time point
-        """
-        batch_size = xs_b.shape[0]
-        n_points = xs_b.shape[1]
-        device = xs_b.device
-        
-        params_b = self.params_b.to(device)
-        
-        # Generate tissue curves
-        ys_b = torch.zeros(batch_size, n_points, 1, device=device)
-        
-        for b in range(batch_size):
-            # Extract time points from first dimension
-            time_points = xs_b[b, :, 0]
-            
-            # Get or generate AIF
-            if self.n_dims >= 2:
-                # AIF provided in input
-                aif_values = xs_b[b, :, 1]
-            else:
-                # Generate AIF using gamma variate
-                seed = hash(b) % (2**32) if self.seeds is None else self.seeds[b]
-                aif_values = self._generate_aif(time_points, device, seed)
-            
-            # Simulate tissue curve using compartmental model
-            tissue_curve = self._simulate_blood_flow(
-                params_b[b], time_points, aif_values, device
-            )
-            
-            # Add realistic noise (MRI noise is typically 2-5% of signal)
-            noise_level = 0.03
-            noise = torch.randn_like(tissue_curve) * noise_level * tissue_curve.abs().mean()
-            tissue_curve = tissue_curve + noise
-            
-            # Store as output
-            ys_b[b, :, 0] = tissue_curve * self.scale
-        
-        return ys_b
+        _, _, n_dims = xs_b.shape
+        time_points = xs_b[:, :, 0]
+        aif_values = xs_b[:, :, 1] if n_dims >= 2 else self._generate_aif_batch(time_points)
 
-    @staticmethod
-    def generate_pool_dict(n_dims, num_tasks, param_ranges=None, **kwargs):
-        """Generate a pool of blood flow parameter estimation tasks."""
-        if param_ranges is None:
-            param_ranges = {
-                'F': (0.5, 2.0),
-                'vp': (0.02, 0.10),
-                've': (0.10, 0.30),
-                'PS': (0.1, 0.8)
-            }
-        
-        params = torch.zeros(num_tasks, 4)
-        for i, (key, (pmin, pmax)) in enumerate(param_ranges.items()):
-            params[:, i] = torch.rand(num_tasks) * (pmax - pmin) + pmin
-        
-        return {"params": params}
+        tissue = self._simulate_batch(time_points, aif_values, self.params_b)
 
-    @staticmethod
-    def get_metric():
-        """Return metric that evaluates parameter estimation at the last position."""
-        # This will be set properly when the task is instantiated
-        return squared_error
+        # add independent Gaussian measurement noise
+        sigma = 0.03 * tissue.mean(dim=1, keepdim=True) # 3% of mean signal
+        noise = torch.randn_like(tissue) * sigma
 
-    @staticmethod
-    def get_training_metric():
-        """Return training metric for parameter estimation."""
-        return mean_squared_error
-    
+        return (tissue + noise).unsqueeze(-1) * self.scale
