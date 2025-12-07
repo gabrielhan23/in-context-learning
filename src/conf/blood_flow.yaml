@@ -3,16 +3,17 @@ inherit:
 
 model:
     family: gpt2_param_estimation
-    n_params: 4 # F, vp, ve, PS
+    n_params: 5 # F, vp, ve, PS, tau0
 
 training:
     task: blood_flow
     task_kwargs:
         param_ranges:
-            F: [0.5, 4.0]    # Flow in ml/g/min
+            F: [0.5, 4.0] # Flow in ml/g/min
             vp: [0.02, 0.15] # Plasma volume fraction
-            ve: [0.18, 0.5]  # Extracellular volume fraction
-            PS: [0.1, 1.0]   # Permeability in ml/g/min
+            ve: [0.18, 0.5] # Extracellular volume fraction
+            PS: [0.1, 1.0] # Permeability in ml/g/min
+            tau0: [0.2, 5.0] # Transit delay (s)
     data: time_series # Use time series sampler
     curriculum:
         points:

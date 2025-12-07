@@ -572,13 +572,13 @@ class BloodFlow:
                           aif[b].cpu().numpy())).to(self.device)
         return aif_delayed
 
-    def _rk4_step(self, Cp, Ce, Ca, dt, Fv, vp, ve, PS):
+    def _rk4_step(self, Cp, Ce, Ca, dt, Fv, vp, PS):
         
         # ODE derivatives
         def dCp(Cp, Ce, Ca): 
-            return Fv*(Ca - Cp/vp) + PS*(Ce - Cp)
+            return Fv * (Ca - Cp / vp) + PS * (Ce - Cp)
         def dCe(Cp, Ce): 
-            return PS*(Cp - Ce)
+            return PS * (Cp - Ce)
 
         k1_Cp = dCp(Cp, Ce, Ca) * dt
         k1_Ce = dCe(Cp, Ce) * dt
@@ -613,7 +613,7 @@ class BloodFlow:
                 dt = (time_points[:, i + 1] - time_points[:, i]).clamp(min=1e-6)
                 dt_sub = dt / self.rk4_substeps
                 for _ in range(self.rk4_substeps):
-                    Cp, Ce = self._rk4_step(Cp, Ce, aif_delayed[:, i], dt_sub, Fv, vp, ve, PS)
+                    Cp, Ce = self._rk4_step(Cp, Ce, aif_delayed[:, i], dt_sub, Fv, vp, PS)
         return tissue
 
     def evaluate(self, xs_b):

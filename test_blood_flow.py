@@ -62,7 +62,7 @@ def test_blood_flow():
     
     # Visualize results
     print("\nGenerating visualization...")
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig, axes = plt.subplots(2, 2, figsize=(8, 6))
     axes = axes.flatten()
     
     for i in range(batch_size):
@@ -99,10 +99,11 @@ def test_blood_flow():
     
     plt.tight_layout()
     
-    # Save figure
+    # Save figure and show
     output_path = 'blood_flow_test.png'
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"\nVisualization saved to: {output_path}")
+    plt.show()
     
     # Print statistics
     print("\nTissue Curve Statistics:")
