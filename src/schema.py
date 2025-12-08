@@ -14,6 +14,7 @@ TASK_LIST = [
     "relu_2nn_regression",
     "decision_tree",
     "predator_prey",
+    "blood_flow",
 ]
 
 # Default configuration values

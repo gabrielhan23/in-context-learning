@@ -213,7 +213,7 @@ if __name__ == "__main__":
     # Convert to namespace for attribute access
     args = dict_to_namespace(config_dict)
     
-    assert args.model.family in ["gpt2", "lstm"]
+    assert args.model.family in ["gpt2", "lstm", "gpt2_param_estimation"]
     print(f"Running with config from: {cmd_args.config}")
 
     if not args.test_run:
