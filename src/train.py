@@ -178,7 +178,10 @@ def main(args, config_dict=None):
     train(model, args)
 
     if not args.test_run:
-        _ = get_run_metrics(args.out_dir)  # precompute metrics for eval
+        try:
+            _ = get_run_metrics(args.out_dir)
+        except KeyError:
+            print("Skipping evaluation: No baselines registered for this task.")
 
 
 if __name__ == "__main__":

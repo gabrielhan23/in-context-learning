@@ -14,11 +14,13 @@ training:
             ve: [0.18, 0.5] # Extracellular volume fraction
             PS: [0.1, 1.0] # Permeability in ml/g/min
             tau0: [0.2, 5.0] # Transit delay (s)
-    data: time_series # Use time series sampler
+    data: time_series # Use time series samplerm
+    batch_size: 16
+    train_steps: 1000
     curriculum:
         points:
             start: 11
-            end: 41
+            end: 21
             inc: 2
             interval: 2000
 
