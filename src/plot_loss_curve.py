@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 
-loss_path = "models/blood_flow/906b023d-906d-420d-ac47-4eb4a237f3bb/loss.npy"
+loss_path = "models/blood_flow/f484083d-8ee1-488f-93a4-2434539f0af1/loss.npy"
 loss = np.load(loss_path)
 
 plt.figure(figsize=(8, 5))
