@@ -526,9 +526,10 @@ class PredatorPrey(Task):
         
         return param_estimation_loss
 
-class BloodFlow:
-    def __init__(self, n_dims=2, batch_size=4, param_ranges=None,
-                 rk4_substeps=8, device=None, scale=1.0):
+class BloodFlow(Task):
+    def __init__(self, n_dims=2, batch_size=4, pool_dict=None, seeds=None,
+                 param_ranges=None, rk4_substeps=8, device=None, scale=1.0):
+        super().__init__(n_dims, batch_size, pool_dict, seeds)
         self.n_dims = n_dims
         self.b_size = batch_size
         self.rk4_substeps = rk4_substeps
@@ -627,4 +628,41 @@ class BloodFlow:
         sigma = 0.03 * tissue.mean(dim=1, keepdim=True) # 3% of mean signal
         noise = torch.randn_like(tissue) * sigma
 
-        return (tissue + noise).unsqueeze(-1) * self.scale
+        signal = (tissue + noise).unsqueeze(-1) * self.scale
+        padding = torch.zeros_like(signal)  # add missing channel
+        return torch.cat([signal, padding], dim=-1)
+
+    
+    def get_training_metric(self):
+        params_b = self.params_b
+
+        def loss_fn(ys_pred, ys_unused):
+            # ys_pred: [batch, n_points, 5]
+            last_pred = ys_pred[:, -1, :]        # [batch, 5]
+            true_params = params_b.to(ys_pred.device)
+            loss = ((last_pred - true_params).square()).mean()  # SCALAR
+            return loss
+
+        return loss_fn
+
+    def get_metric(self):
+        params_b = self.params_b
+
+        def metric_fn(ys_pred, ys_unused):
+            # ys_pred: [batch, n_points, 5]
+            B, T, P = ys_pred.shape
+
+            last_pred = ys_pred[:, -1, :]        # [batch, 5]
+            true_params = params_b.to(ys_pred.device)
+
+            # error per batch
+            err = ((last_pred - true_params).square()).mean(dim=1)  # [batch]
+
+            # expand to all timepoints
+            out = torch.zeros(B, T, device=ys_pred.device)
+            out[:, -1] = err
+
+            return out
+
+        return metric_fn
+
