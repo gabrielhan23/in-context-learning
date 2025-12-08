@@ -14,10 +14,13 @@ from curriculum import Curriculum
 from schema import load_config, dict_to_namespace, validate_config
 from models import build_model
 from print_torch import pt as pprint
+import numpy as np
 
 import wandb
 
 torch.backends.cudnn.benchmark = True
+loss_history = []
+
 
 
 def train_step(model, xs, ys, optimizer, loss_func):
@@ -94,6 +97,7 @@ def train(model, args):
         pprint("XS", xs)
 
         loss, output = train_step(model, xs.to(device), ys.to(device), optimizer, loss_func)
+        loss_history.append(loss)
 
         pprint("OUTPUT", output)
         pprint("loss", loss)
@@ -111,18 +115,19 @@ def train(model, args):
         )
 
         if i % args.wandb.log_every_steps == 0 and not args.test_run:
-            wandb.log(
-                {
-                    "overall_loss": loss,
-                    "excess_loss": loss / baseline_loss,
-                    "pointwise/loss": dict(
-                        zip(point_wise_tags, point_wise_loss.cpu().numpy())
-                    ),
-                    "n_points": curriculum.n_points,
-                    "n_dims": curriculum.n_dims_truncated,
-                },
-                step=i,
-            )
+            pass
+            # wandb.log(
+            #     {
+            #         "overall_loss": loss,
+            #         "excess_loss": loss / baseline_loss,
+            #         "pointwise/loss": dict(
+            #             zip(point_wise_tags, point_wise_loss.cpu().numpy())
+            #         ),
+            #         "n_points": curriculum.n_points,
+            #         "n_dims": curriculum.n_dims_truncated,
+            #     },
+            #     step=i,
+            # )
 
         curriculum.update()
 
@@ -142,24 +147,24 @@ def train(model, args):
             and i > 0
         ):
             torch.save(model.state_dict(), os.path.join(args.out_dir, f"model_{i}.pt"))
+    # -----------------------
+    # Save loss history
+    # -----------------------
+    loss_history_array = np.array(loss_history)
+
+    np.save(os.path.join(args.out_dir, "loss.npy"), loss_history_array)
+
+    with open(os.path.join(args.out_dir, "loss.csv"), "w") as f:
+        f.write("step,loss\n")
+        for i, L in enumerate(loss_history_array):
+            f.write(f"{i},{L}\n")
+
+    print(f"[INFO] Saved loss curve to: {args.out_dir}/loss.npy and loss.csv")
 
 
 def main(args, config_dict=None):
-    if args.test_run:
-        curriculum_args = args.training.curriculum
-        curriculum_args.points.start = curriculum_args.points.end
-        curriculum_args.dims.start = curriculum_args.dims.end
-        args.training.train_steps = 100
-    else:
-        wandb.init(
-            dir=args.out_dir,
-            project=args.wandb.project,
-            entity=args.wandb.entity,
-            config=config_dict if config_dict else vars(args),
-            notes=args.wandb.notes,
-            name=args.wandb.name,
-            resume=True,
-        )
+    os.environ["WANDB_MODE"] = "disabled"
+    print("[INFO] WandB disabled — using local NumPy logging only.")
 
     # Detect device and move model (support CUDA, MPS, and CPU)
     if torch.cuda.is_available():
