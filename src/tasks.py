@@ -637,10 +637,9 @@ class BloodFlow(Task):
         params_b = self.params_b
 
         def loss_fn(ys_pred, ys_unused):
-            # ys_pred: [batch, n_points, 5]
-            last_pred = ys_pred[:, -1, :]        # [batch, 5]
+            last_pred = ys_pred[:, -1, :]
             true_params = params_b.to(ys_pred.device)
-            loss = ((last_pred - true_params).square()).mean()  # SCALAR
+            loss = ((last_pred - true_params).square()).mean()
             return loss
 
         return loss_fn
@@ -649,19 +648,12 @@ class BloodFlow(Task):
         params_b = self.params_b
 
         def metric_fn(ys_pred, ys_unused):
-            # ys_pred: [batch, n_points, 5]
             B, T, P = ys_pred.shape
-
-            last_pred = ys_pred[:, -1, :]        # [batch, 5]
+            last_pred = ys_pred[:, -1, :]
             true_params = params_b.to(ys_pred.device)
-
-            # error per batch
-            err = ((last_pred - true_params).square()).mean(dim=1)  # [batch]
-
-            # expand to all timepoints
+            err = ((last_pred - true_params).square()).mean(dim=1)
             out = torch.zeros(B, T, device=ys_pred.device)
             out[:, -1] = err
-
             return out
 
         return metric_fn
