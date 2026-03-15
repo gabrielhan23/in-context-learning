@@ -1,4 +1,6 @@
-# 182 Group Project YAY
+# Physics Guided Probabilistic Transformers for Amortized Inference in Quantitative Myocardial Perfusions
+
+https://drive.google.com/file/d/1ZoPWgzED4ce58MVmMdhxc7krN6CZjfvL/view?usp=sharing
 
 ## Setup
 ```
